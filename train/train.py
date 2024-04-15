@@ -181,7 +181,7 @@ class MaskDecoderHQ(MaskDecoder):
         """
         vit_features = interm_embeddings[0].permute(0, 3, 1, 2)
         #image_fpn_features=self.embedding_image1(f1)+self.embedding_image2(f2)+self.embedding_image3(f3)+self.embedding_image4(f4)
-        cavang_features=self.embedding_encoder(image_embeddings) +self.embedding_maskfeature(vit_features)
+        cavang_features=self.embedding_encoder(image_embeddings) +self.compress_vit_feat(vit_features)
         batch_len = len(image_embeddings)
         masks = []
         iou_preds = []
