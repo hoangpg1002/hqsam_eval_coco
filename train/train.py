@@ -180,10 +180,7 @@ class MaskDecoderHQ(MaskDecoder):
           torch.Tensor: batched predicted hq masks
         """
         vit_features = interm_embeddings[0].permute(0, 3, 1, 2)
-        image=interm_embeddings.pop()
-        out = self.fpn(image)
-        f1,f2,f3,f4=out[0],out[1],out[2],out[3]
-        image_fpn_features=self.embedding_image1(f1)+self.embedding_image2(f2)+self.embedding_image3(f3)+self.embedding_image4(f4)
+        #image_fpn_features=self.embedding_image1(f1)+self.embedding_image2(f2)+self.embedding_image3(f3)+self.embedding_image4(f4)
         cavang_features=self.embedding_encoder(image_embeddings) +self.embedding_maskfeature(vit_features)
         batch_len = len(image_embeddings)
         masks = []
@@ -214,7 +211,6 @@ class MaskDecoderHQ(MaskDecoder):
             # singale mask output, default
             mask_slice = slice(0, 1)
             masks_sam = masks[:,mask_slice]
-        interm_embeddings.append(image)
         masks_hq = masks[:,slice(self.num_mask_tokens-1, self.num_mask_tokens), :, :]
         
         if hq_token_only:
