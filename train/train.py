@@ -412,7 +412,7 @@ def train(net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler):
     net.train()
     _ = net.to(device="cuda")
     
-    sam = sam_model_registry["vit_b"](checkpoint="/kaggle/working/sam-hq-research/train/pretrained_checkpoint/sam_vit_b_01ec64.pth")
+    sam = sam_model_registry["vit_b"](checkpoint="/kaggle/working/hqsam_eval_coco/train/pretrained_checkpoint/sam_vit_b_01ec64.pth")
     _ = sam.to(device="cuda")
     # sam = torch.nn.parallel.DistributedDataParallel(sam, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
     
