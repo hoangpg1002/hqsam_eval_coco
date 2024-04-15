@@ -16,14 +16,12 @@ import matplotlib.pyplot as plt
 import cv2
 import random
 from typing import Dict, List, Tuple
-
 from segment_anything_training import sam_model_registry
 from segment_anything_training.modeling import TwoWayTransformer, MaskDecoder
-
+from torchvision.models import MobileNet_V3_Large_Weights
 from utils.dataloader import get_im_gt_name_dict, create_dataloaders, RandomHFlip, Resize, LargeScaleJitter
 from utils.loss_mask import loss_masks
 import utils.misc as misc
-
 
 
 class LayerNorm2d(nn.Module):
@@ -79,7 +77,7 @@ class MaskDecoderHQ(MaskDecoder):
                         iou_head_hidden_dim= 256,)
         assert model_type in ["vit_b","vit_l","vit_h"]
         
-        checkpoint_dict = {"vit_b":"pretrained_checkpoint/sam_vit_b_maskdecoder.pth",
+        checkpoint_dict = {"vit_b":"/kaggle/working/sam-hq-research/train/pretrained_checkpoint/sam_vit_b_maskdecoder.pth",
                            "vit_l":"pretrained_checkpoint/sam_vit_l_maskdecoder.pth",
                            'vit_h':"pretrained_checkpoint/sam_vit_h_maskdecoder.pth"}
         checkpoint_path = checkpoint_dict[model_type]
@@ -87,7 +85,6 @@ class MaskDecoderHQ(MaskDecoder):
         print("HQ Decoder init from SAM MaskDecoder")
         for n,p in self.named_parameters():
             p.requires_grad = False
-
         transformer_dim=256
         vit_dim_dict = {"vit_b":768,"vit_l":1024,"vit_h":1280}
         vit_dim = vit_dim_dict[model_type]
@@ -97,11 +94,11 @@ class MaskDecoderHQ(MaskDecoder):
         self.num_mask_tokens = self.num_mask_tokens + 1
 
         self.compress_vit_feat = nn.Sequential(
-                                        nn.ConvTranspose2d(vit_dim, transformer_dim, kernel_size=2, stride=2),
-                                        LayerNorm2d(transformer_dim),
-                                        nn.GELU(), 
-                                        nn.ConvTranspose2d(transformer_dim, transformer_dim // 8, kernel_size=2, stride=2))
-        
+                                            nn.ConvTranspose2d(vit_dim, transformer_dim, kernel_size=2, stride=2),
+                                            LayerNorm2d(transformer_dim),
+                                            nn.GELU(), 
+                                            nn.ConvTranspose2d(transformer_dim, transformer_dim // 8, kernel_size=2, stride=2))
+            
         self.embedding_encoder = nn.Sequential(
                                         nn.ConvTranspose2d(transformer_dim, transformer_dim // 4, kernel_size=2, stride=2),
                                         LayerNorm2d(transformer_dim // 4),
@@ -114,6 +111,49 @@ class MaskDecoderHQ(MaskDecoder):
                                         LayerNorm2d(transformer_dim // 4),
                                         nn.GELU(),
                                         nn.Conv2d(transformer_dim // 4, transformer_dim // 8, 3, 1, 1))
+        self.embedding_image1 = nn.Sequential(
+                                            nn.Conv2d(transformer_dim,transformer_dim, kernel_size=3, stride=1,padding=1),
+                                            LayerNorm2d(transformer_dim),
+                                            nn.GELU(),
+                                            nn.Conv2d(transformer_dim,transformer_dim//8,kernel_size=1,stride=1),
+                                            LayerNorm2d(transformer_dim//8),
+                                            nn.GELU(),
+                                        )
+        self.embedding_image2 = nn.Sequential(
+                                            nn.Conv2d(transformer_dim,transformer_dim, kernel_size=3, stride=1,padding=1),
+                                            LayerNorm2d(transformer_dim),
+                                            nn.GELU(),
+                                            nn.ConvTranspose2d(transformer_dim,transformer_dim//4,kernel_size=2,stride=2),
+                                            LayerNorm2d(transformer_dim//4),
+                                            nn.GELU(),
+                                            nn.Conv2d(transformer_dim//4,transformer_dim//8,kernel_size=1,stride=1),
+                                        )
+        self.embedding_image3 = nn.Sequential(
+                                            nn.Conv2d(transformer_dim,transformer_dim, kernel_size=3, stride=1,padding=1),
+                                            LayerNorm2d(transformer_dim),
+                                            nn.GELU(),
+                                            nn.ConvTranspose2d(transformer_dim,transformer_dim//4,kernel_size=2,stride=2),
+                                            LayerNorm2d(transformer_dim//4),
+                                            nn.GELU(),
+                                            nn.ConvTranspose2d(transformer_dim//4,transformer_dim//8,kernel_size=2,stride=2),
+                                            LayerNorm2d(transformer_dim//8),
+                                            nn.GELU(),
+                                        )
+        self.embedding_image4 = nn.Sequential(
+                                            nn.Conv2d(transformer_dim,transformer_dim, kernel_size=3, stride=1,padding=1),
+                                            LayerNorm2d(transformer_dim),
+                                            nn.GELU(),
+                                            nn.ConvTranspose2d(transformer_dim,transformer_dim//4,kernel_size=2,stride=2),
+                                            LayerNorm2d(transformer_dim//4),
+                                            nn.GELU(),
+                                            nn.ConvTranspose2d(transformer_dim//4,transformer_dim//8,kernel_size=2,stride=2),
+                                            LayerNorm2d(transformer_dim//8),
+                                            nn.GELU(),
+                                            nn.ConvTranspose2d(transformer_dim//8,transformer_dim//16,kernel_size=2,stride=2),
+                                            LayerNorm2d(transformer_dim//16),
+                                            nn.GELU(),
+                                            nn.Conv2d(transformer_dim//16,transformer_dim//8,kernel_size=1,stride=1)
+                                        )
 
     def forward(
         self,
@@ -139,10 +179,12 @@ class MaskDecoderHQ(MaskDecoder):
         Returns:
           torch.Tensor: batched predicted hq masks
         """
-        
-        vit_features = interm_embeddings[0].permute(0, 3, 1, 2) # early-layer ViT feature, after 1st global attention block in ViT
-        hq_features = self.embedding_encoder(image_embeddings) + self.compress_vit_feat(vit_features)
-
+        vit_features = interm_embeddings[0].permute(0, 3, 1, 2)
+        image=interm_embeddings.pop()
+        out = self.fpn(image)
+        f1,f2,f3,f4=out[0],out[1],out[2],out[3]
+        image_fpn_features=self.embedding_image1(f1)+self.embedding_image2(f2)+self.embedding_image3(f3)+self.embedding_image4(f4)
+        cavang_features=self.embedding_encoder(image_embeddings) +self.embedding_maskfeature(vit_features)
         batch_len = len(image_embeddings)
         masks = []
         iou_preds = []
@@ -152,7 +194,7 @@ class MaskDecoderHQ(MaskDecoder):
                 image_pe=image_pe[i_batch],
                 sparse_prompt_embeddings=sparse_prompt_embeddings[i_batch],
                 dense_prompt_embeddings=dense_prompt_embeddings[i_batch],
-                hq_feature = hq_features[i_batch].unsqueeze(0)
+                hq_feature = cavang_features[i_batch].unsqueeze(0)
             )
             masks.append(mask)
             iou_preds.append(iou_pred)
@@ -172,7 +214,7 @@ class MaskDecoderHQ(MaskDecoder):
             # singale mask output, default
             mask_slice = slice(0, 1)
             masks_sam = masks[:,mask_slice]
-
+        interm_embeddings.append(image)
         masks_hq = masks[:,slice(self.num_mask_tokens-1, self.num_mask_tokens), :, :]
         
         if hq_token_only:
@@ -269,135 +311,121 @@ def show_box(box, ax):
     ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='green', facecolor=(0,0,0,0), lw=2))    
 
 
-def get_args_parser():
-    parser = argparse.ArgumentParser('HQ-SAM', add_help=False)
+# def get_args_parser():
+#     parser = argparse.ArgumentParser('HQ-SAM', add_help=False)
 
-    parser.add_argument("--output", type=str, required=True, 
-                        help="Path to the directory where masks and checkpoints will be output")
-    parser.add_argument("--model-type", type=str, default="vit_l", 
-                        help="The type of model to load, in ['vit_h', 'vit_l', 'vit_b']")
-    parser.add_argument("--checkpoint", type=str, required=True, 
-                        help="The path to the SAM checkpoint to use for mask generation.")
-    parser.add_argument("--device", type=str, default="cuda", 
-                        help="The device to run generation on.")
+#     parser.add_argument("--output", type=str, required=True, default="/train/",
+#                         help="Path to the directory where masks and checkpoints will be output")
+#     parser.add_argument("--model-type", type=str, default="vit_b", 
+#                         help="The type of model to load, in ['vit_h', 'vit_l', 'vit_b']")
+#     parser.add_argument("--checkpoint", type=str, required=True, default="train\pretrained_checkpoint",
+#                         help="The path to the SAM checkpoint to use for mask generation.")
+#     parser.add_argument("--device", type=str, default="cuda", 
+#                         help="The device to run generation on.")
 
-    parser.add_argument('--seed', default=42, type=int)
-    parser.add_argument('--learning_rate', default=1e-3, type=float)
-    parser.add_argument('--start_epoch', default=0, type=int)
-    parser.add_argument('--lr_drop_epoch', default=10, type=int)
-    parser.add_argument('--max_epoch_num', default=12, type=int)
-    parser.add_argument('--input_size', default=[1024,1024], type=list)
-    parser.add_argument('--batch_size_train', default=4, type=int)
-    parser.add_argument('--batch_size_valid', default=1, type=int)
-    parser.add_argument('--model_save_fre', default=1, type=int)
+#     parser.add_argument('--seed', default=42, type=int)
+#     parser.add_argument('--learning_rate', default=1e-3, type=float)
+#     parser.add_argument('--start_epoch', default=0, type=int)
+#     parser.add_argument('--lr_drop_epoch', default=10, type=int)
+#     parser.add_argument('--max_epoch_num', default=12, type=int)
+#     parser.add_argument('--input_size', default=[1024,1024], type=list)
+#     parser.add_argument('--batch_size_train', default=4, type=int)
+#     parser.add_argument('--batch_size_valid', default=1, type=int)
+#     parser.add_argument('--model_save_fre', default=1, type=int)
 
-    parser.add_argument('--world_size', default=1, type=int,
-                        help='number of distributed processes')
-    parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
-    parser.add_argument('--rank', default=0, type=int,
-                        help='number of distributed processes')
-    parser.add_argument('--local_rank', type=int, help='local rank for dist')
-    parser.add_argument('--find_unused_params', action='store_true')
+#     # parser.add_argument('--world_size', default=1, type=int,
+#     #                     help='number of distributed processes')
+#     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
+#     # parser.add_argument('--rank', default=0, type=int,
+#     #                     help='number of distributed processes')
+#     # parser.add_argument('--local_rank', type=int, help='local rank for dist')
+#     parser.add_argument('--find_unused_params', action='store_true')
 
-    parser.add_argument('--eval', action='store_true')
-    parser.add_argument('--visualize', action='store_true')
-    parser.add_argument("--restore-model", type=str,
-                        help="The path to the hq_decoder training checkpoint for evaluation")
+#     parser.add_argument('--eval', action='store_true')
+#     parser.add_argument('--visualize', action='store_true')
+#     parser.add_argument("--restore-model", type=str,
+#                         help="The path to the hq_decoder training checkpoint for evaluation")
 
-    return parser.parse_args()
+#     return parser.parse_args()
 
 
-def main(net, train_datasets, valid_datasets, args):
+def main(net, train_datasets, valid_datasets):
 
-    misc.init_distributed_mode(args)
-    print('world size: {}'.format(args.world_size))
-    print('rank: {}'.format(args.rank))
-    print('local_rank: {}'.format(args.local_rank))
-    print("args: " + str(args) + '\n')
+    # misc.init_distributed_mode(args)
+    # print('world size: {}'.format(args.world_size))
+    # print('rank: {}'.format(args.rank))
+    # print('local_rank: {}'.format(args.local_rank))
+    # print("args: " + str(args) + '\n')
 
-    seed = args.seed + misc.get_rank()
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
+    # seed = args.seed + misc.get_rank()
+    # torch.manual_seed(seed)
+    # np.random.seed(seed)
+    # random.seed(seed)
 
     ### --- Step 1: Train or Valid dataset ---
-    if not args.eval:
-        print("--- create training dataloader ---")
-        train_im_gt_list = get_im_gt_name_dict(train_datasets, flag="train")
-        train_dataloaders, train_datasets = create_dataloaders(train_im_gt_list,
-                                                        my_transforms = [
-                                                                    RandomHFlip(),
-                                                                    LargeScaleJitter()
-                                                                    ],
-                                                        batch_size = args.batch_size_train,
-                                                        training = True)
-        print(len(train_dataloaders), " train dataloaders created")
+    print("--- create training dataloader ---")
+    train_im_gt_list = get_im_gt_name_dict(train_datasets, flag="train")
+    train_dataloaders, train_datasets = create_dataloaders(train_im_gt_list,
+                                                    my_transforms = [
+                                                                RandomHFlip(),
+                                                                LargeScaleJitter()
+                                                                ],
+                                                    batch_size = 2,
+                                                    training = True)
+    print(len(train_dataloaders), " train dataloaders created")
 
     print("--- create valid dataloader ---")
     valid_im_gt_list = get_im_gt_name_dict(valid_datasets, flag="valid")
     valid_dataloaders, valid_datasets = create_dataloaders(valid_im_gt_list,
                                                           my_transforms = [
-                                                                        Resize(args.input_size)
+                                                                        Resize([1024,1024])
                                                                     ],
-                                                          batch_size=args.batch_size_valid,
+                                                          batch_size=1,
                                                           training=False)
     print(len(valid_dataloaders), " valid dataloaders created")
     
     ### --- Step 2: DistributedDataParallel---
-    if torch.cuda.is_available():
-        net.cuda()
-    net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
-    net_without_ddp = net.module
+    # if torch.cuda.is_available():
+    #     net.cuda()
+    # net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
+    # net_without_ddp = net.module
 
  
     ### --- Step 3: Train or Evaluate ---
-    if not args.eval:
-        print("--- define optimizer ---")
-        optimizer = optim.Adam(net_without_ddp.parameters(), lr=args.learning_rate, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, args.lr_drop_epoch)
-        lr_scheduler.last_epoch = args.start_epoch
-
-        train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler)
-    else:
-        sam = sam_model_registry[args.model_type](checkpoint=args.checkpoint)
-        _ = sam.to(device=args.device)
-        sam = torch.nn.parallel.DistributedDataParallel(sam, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
-
-        if args.restore_model:
-            print("restore model from:", args.restore_model)
-            if torch.cuda.is_available():
-                net_without_ddp.load_state_dict(torch.load(args.restore_model))
-            else:
-                net_without_ddp.load_state_dict(torch.load(args.restore_model,map_location="cpu"))
-    
-        evaluate(args, net, sam, valid_dataloaders, args.visualize)
+    print("--- define optimizer ---")
+    optimizer = optim.Adam(net.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
+    lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 10)
+    lr_scheduler.last_epoch = 0
+    train(net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler)
+    sam = sam_model_registry["vit_b"](checkpoint="/kaggle/working/sam-hq-research/train/pretrained_checkpoint/sam_vit_b_01ec64.pth").to(device="cuda")
+    evaluate(net, sam, valid_dataloaders)
 
 
-def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler):
+def train(net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler):
     if misc.is_main_process():
-        os.makedirs(args.output, exist_ok=True)
+        os.makedirs("train", exist_ok=True)
 
-    epoch_start = args.start_epoch
-    epoch_num = args.max_epoch_num
+    epoch_start = 0
+    epoch_num = 20
     train_num = len(train_dataloaders)
 
     net.train()
-    _ = net.to(device=args.device)
+    _ = net.to(device="cuda")
     
-    sam = sam_model_registry[args.model_type](checkpoint=args.checkpoint)
-    _ = sam.to(device=args.device)
-    sam = torch.nn.parallel.DistributedDataParallel(sam, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
+    sam = sam_model_registry["vit_b"](checkpoint="/kaggle/working/sam-hq-research/train/pretrained_checkpoint/sam_vit_b_01ec64.pth")
+    _ = sam.to(device="cuda")
+    # sam = torch.nn.parallel.DistributedDataParallel(sam, device_ids=[args.gpu], find_unused_parameters=args.find_unused_params)
     
     for epoch in range(epoch_start,epoch_num): 
         print("epoch:   ",epoch, "  learning rate:  ", optimizer.param_groups[0]["lr"])
         metric_logger = misc.MetricLogger(delimiter="  ")
-        train_dataloaders.batch_sampler.sampler.set_epoch(epoch)
+        # train_dataloaders.batch_sampler.sampler.set_epoch(epoch)
 
-        for data in metric_logger.log_every(train_dataloaders,1000):
+        for data in metric_logger.log_every(train_dataloaders,100):
             inputs, labels = data['image'], data['label']
             if torch.cuda.is_available():
-                inputs = inputs.cuda()
-                labels = labels.cuda()
+                inputs = inputs.to(device="cuda")
+                labels = labels.to(device="cuda")
 
             imgs = inputs.permute(0, 2, 3, 1).cpu().numpy()
             
@@ -473,29 +501,29 @@ def train(args, net, optimizer, train_dataloaders, valid_dataloaders, lr_schedul
         train_stats = {k: meter.global_avg for k, meter in metric_logger.meters.items() if meter.count > 0}
 
         lr_scheduler.step()
-        test_stats = evaluate(args, net, sam, valid_dataloaders)
+        test_stats = evaluate(net, sam, valid_dataloaders)
         train_stats.update(test_stats)
         
         net.train()  
 
-        if epoch % args.model_save_fre == 0:
+        if epoch % 1 == 0:
             model_name = "/epoch_"+str(epoch)+".pth"
-            print('come here save at', args.output + model_name)
-            misc.save_on_master(net.module.state_dict(), args.output + model_name)
+            print('come here save at', "train" + model_name)
+            misc.save_on_master(net.state_dict(),"train" + model_name)
     
     # Finish training
     print("Training Reaches The Maximum Epoch Number")
     
     # merge sam and hq_decoder
-    if misc.is_main_process():
-        sam_ckpt = torch.load(args.checkpoint)
-        hq_decoder = torch.load(args.output + model_name)
-        for key in hq_decoder.keys():
-            sam_key = 'mask_decoder.'+key
-            if sam_key not in sam_ckpt.keys():
-                sam_ckpt[sam_key] = hq_decoder[key]
-        model_name = "/sam_hq_epoch_"+str(epoch)+".pth"
-        torch.save(sam_ckpt, args.output + model_name)
+    # if misc.is_main_process():
+    #     sam_ckpt = torch.load("train\pretrained_checkpoint\sam_vit_b_01ec64.pth")
+    #     hq_decoder = torch.load("train" + model_name)
+    #     for key in hq_decoder.keys():
+    #         sam_key = 'mask_decoder.'+key
+    #         if sam_key not in sam_ckpt.keys():
+    #             sam_ckpt[sam_key] = hq_decoder[key]
+    #     model_name = "/sam_hq_epoch_"+str(epoch)+".pth"
+    #     torch.save(sam_ckpt, "train" + model_name)
 
 
 
@@ -521,8 +549,9 @@ def compute_boundary_iou(preds, target):
         iou = iou + misc.boundary_iou(target[i],postprocess_preds[i])
     return iou / len(preds)
 
-def evaluate(args, net, sam, valid_dataloaders, visualize=False):
+def evaluate(net, sam, valid_dataloaders):
     net.eval()
+    net.to(device="cuda")
     print("Validating...")
     test_stats = {}
 
@@ -531,7 +560,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
         valid_dataloader = valid_dataloaders[k]
         print('valid_dataloader len:', len(valid_dataloader))
 
-        for data_val in metric_logger.log_every(valid_dataloader,1000):
+        for data_val in metric_logger.log_every(valid_dataloader,50):
             imidx_val, inputs_val, labels_val, shapes_val, labels_ori = data_val['imidx'], data_val['image'], data_val['label'], data_val['shape'], data_val['ori_label']
 
             if torch.cuda.is_available():
@@ -583,21 +612,7 @@ def evaluate(args, net, sam, valid_dataloaders, visualize=False):
 
             iou = compute_iou(masks_hq,labels_ori)
             boundary_iou = compute_boundary_iou(masks_hq,labels_ori)
-
-            if visualize:
-                print("visualize")
-                os.makedirs(args.output, exist_ok=True)
-                masks_hq_vis = (F.interpolate(masks_hq.detach(), (1024, 1024), mode="bilinear", align_corners=False) > 0).cpu()
-                for ii in range(len(imgs)):
-                    base = data_val['imidx'][ii].item()
-                    print('base:', base)
-                    save_base = os.path.join(args.output, str(k)+'_'+ str(base))
-                    imgs_ii = imgs[ii].astype(dtype=np.uint8)
-                    show_iou = torch.tensor([iou.item()])
-                    show_boundary_iou = torch.tensor([boundary_iou.item()])
-                    show_anns(masks_hq_vis[ii], None, labels_box[ii].cpu(), None, save_base , imgs_ii, show_iou, show_boundary_iou)
                        
-
             loss_dict = {"val_iou_"+str(k): iou, "val_boundary_iou_"+str(k): boundary_iou}
             loss_dict_reduced = misc.reduce_dict(loss_dict)
             metric_logger.update(**loss_dict_reduced)
@@ -619,76 +634,76 @@ if __name__ == "__main__":
     ### --------------- Configuring the Train and Valid datasets ---------------
 
     dataset_dis = {"name": "DIS5K-TR",
-                 "im_dir": "./data/DIS5K/DIS-TR/im",
-                 "gt_dir": "./data/DIS5K/DIS-TR/gt",
+                 "im_dir": "/kaggle/input/hq44kseg/DIS5K/DIS5K/DIS-TR/im",
+                 "gt_dir": "/kaggle/input/hq44kseg/DIS5K/DIS5K/DIS-TR/gt",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
 
     dataset_thin = {"name": "ThinObject5k-TR",
-                 "im_dir": "./data/thin_object_detection/ThinObject5K/images_train",
-                 "gt_dir": "./data/thin_object_detection/ThinObject5K/masks_train",
+                 "im_dir": "/kaggle/input/hq44kseg/thin_object_detection/ThinObject5K/images_train",
+                 "gt_dir": "/kaggle/input/hq44kseg/thin_object_detection/ThinObject5K/masks_train",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
 
     dataset_fss = {"name": "FSS",
-                 "im_dir": "./data/cascade_psp/fss_all",
-                 "gt_dir": "./data/cascade_psp/fss_all",
+                 "im_dir": "/kaggle/input/hq44kseg/cascade_psp/fss_all",
+                 "gt_dir": "/kaggle/input/hq44kseg/cascade_psp/fss_all",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
 
     dataset_duts = {"name": "DUTS-TR",
-                 "im_dir": "./data/cascade_psp/DUTS-TR",
-                 "gt_dir": "./data/cascade_psp/DUTS-TR",
+                 "im_dir": "/kaggle/input/hq44kseg/cascade_psp/DUTS-TR",
+                 "gt_dir": "/kaggle/input/hq44kseg/cascade_psp/DUTS-TR",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
 
     dataset_duts_te = {"name": "DUTS-TE",
-                 "im_dir": "./data/cascade_psp/DUTS-TE",
-                 "gt_dir": "./data/cascade_psp/DUTS-TE",
+                 "im_dir": "/kaggle/input/hq44kseg/cascade_psp/DUTS-TE",
+                 "gt_dir": "/kaggle/input/hq44kseg/cascade_psp/DUTS-TE",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
 
     dataset_ecssd = {"name": "ECSSD",
-                 "im_dir": "./data/cascade_psp/ecssd",
-                 "gt_dir": "./data/cascade_psp/ecssd",
+                 "im_dir": "/kaggle/input/hq44kseg/cascade_psp/ecssd",
+                 "gt_dir": "/kaggle/input/hq44kseg/cascade_psp/ecssd",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
 
     dataset_msra = {"name": "MSRA10K",
-                 "im_dir": "./data/cascade_psp/MSRA_10K",
-                 "gt_dir": "./data/cascade_psp/MSRA_10K",
+                 "im_dir": "/kaggle/input/hq44kseg/cascade_psp/MSRA_10K",
+                 "gt_dir": "/kaggle/input/hq44kseg/cascade_psp/MSRA_10K",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
 
     # valid set
     dataset_coift_val = {"name": "COIFT",
-                 "im_dir": "./data/thin_object_detection/COIFT/images",
-                 "gt_dir": "./data/thin_object_detection/COIFT/masks",
+                 "im_dir": "/kaggle/input/hq44kseg/thin_object_detection/COIFT/images",
+                 "gt_dir": "/kaggle/input/hq44kseg/thin_object_detection/COIFT/masks",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
 
     dataset_hrsod_val = {"name": "HRSOD",
-                 "im_dir": "./data/thin_object_detection/HRSOD/images",
-                 "gt_dir": "./data/thin_object_detection/HRSOD/masks_max255",
+                 "im_dir": "/kaggle/input/thinobject5k/thin_object_detection/HRSOD/images",
+                 "gt_dir": "/kaggle/input/thinobject5k/thin_object_detection/HRSOD/masks_max255",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
 
     dataset_thin_val = {"name": "ThinObject5k-TE",
-                 "im_dir": "./data/thin_object_detection/ThinObject5K/images_test",
-                 "gt_dir": "./data/thin_object_detection/ThinObject5K/masks_test",
+                 "im_dir": "/kaggle/input/hq44kseg/thin_object_detection/ThinObject5K/images_test",
+                 "gt_dir": "/kaggle/input/hq44kseg/thin_object_detection/ThinObject5K/masks_test",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
 
     dataset_dis_val = {"name": "DIS5K-VD",
-                 "im_dir": "./data/DIS5K/DIS-VD/im",
-                 "gt_dir": "./data/DIS5K/DIS-VD/gt",
+                 "im_dir": "/kaggle/input/hq44kseg/DIS5K/DIS5K/DIS-VD/im",
+                 "gt_dir": "/kaggle/input/hq44kseg/DIS5K/DIS5K/DIS-VD/gt",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
 
-    train_datasets = [dataset_dis, dataset_thin, dataset_fss, dataset_duts, dataset_duts_te, dataset_ecssd, dataset_msra]
-    valid_datasets = [dataset_dis_val, dataset_coift_val, dataset_hrsod_val, dataset_thin_val] 
+    train_datasets = [dataset_dis]
+    valid_datasets = [dataset_dis_val] 
 
-    args = get_args_parser()
-    net = MaskDecoderHQ(args.model_type) 
+    # args = get_args_parser()
+    net = MaskDecoderHQ("vit_b") 
 
-    main(net, train_datasets, valid_datasets, args)
+    main(net, train_datasets, valid_datasets)
