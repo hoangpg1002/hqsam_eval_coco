@@ -50,27 +50,20 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, training
     gos_dataloaders = []
     gos_datasets = []
 
-    if(len(name_im_gt_list)==0):
+    if len(name_im_gt_list) == 0:
         return gos_dataloaders, gos_datasets
 
-    num_workers_ = 1
-    if(batch_size>1):
-        num_workers_ = 2
-    if(batch_size>4):
-        num_workers_ = 4
-    if(batch_size>8):
-        num_workers_ = 8
+    num_workers_ = 4
 
 
     if training:
         for i in range(len(name_im_gt_list)):   
-            gos_dataset = OnlineDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms))
+            gos_dataset = OnlineDataset([name_im_gt_list[i]], transform=transforms.Compose(my_transforms))
             gos_datasets.append(gos_dataset)
 
         gos_dataset = ConcatDataset(gos_datasets)
-        sampler = DistributedSampler(gos_dataset)
         batch_sampler_train = torch.utils.data.BatchSampler(
-            sampler, batch_size, drop_last=True)
+            torch.utils.data.RandomSampler(gos_dataset), batch_size, drop_last=True)
         dataloader = DataLoader(gos_dataset, batch_sampler=batch_sampler_train, num_workers=num_workers_)
 
         gos_dataloaders = dataloader
@@ -78,9 +71,8 @@ def create_dataloaders(name_im_gt_list, my_transforms=[], batch_size=1, training
 
     else:
         for i in range(len(name_im_gt_list)):   
-            gos_dataset = OnlineDataset([name_im_gt_list[i]], transform = transforms.Compose(my_transforms), eval_ori_resolution = True)
-            sampler = DistributedSampler(gos_dataset, shuffle=False)
-            dataloader = DataLoader(gos_dataset, batch_size, sampler=sampler, drop_last=False, num_workers=num_workers_)
+            gos_dataset = OnlineDataset([name_im_gt_list[i]], transform=transforms.Compose(my_transforms), eval_ori_resolution=True)
+            dataloader = DataLoader(gos_dataset, batch_size=batch_size, shuffle=False, drop_last=False, num_workers=num_workers_)
 
             gos_dataloaders.append(dataloader)
             gos_datasets.append(gos_dataset)
