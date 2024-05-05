@@ -650,7 +650,7 @@ if __name__ == "__main__":
 
     dataset_thin = {"name": "ThinObject5k-TR",
                  "im_dir": "/kaggle/input/hq44kseg/thin_object_detection/ThinObject5K/images_train",
-                 "gt_dir": "/kaggle/input/hq44kseg/thin_object_detection/ThinObject5K/masks_train",
+                 "gt_dir": "/kaggle/input/thinobject5k/thin_object_detection/ThinObject5K/masks_train",
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
 
@@ -709,8 +709,8 @@ if __name__ == "__main__":
                  "im_ext": ".jpg",
                  "gt_ext": ".png"}
 
-    train_datasets = [dataset_thin_val]
-    valid_datasets = [dataset_coift_val] 
+    train_datasets = [dataset_dis, dataset_thin, dataset_fss, dataset_duts, dataset_duts_te, dataset_ecssd, dataset_msra]
+    valid_datasets = [dataset_dis_val, dataset_coift_val, dataset_hrsod_val, dataset_thin_val] 
 
     # args = get_args_parser()
     net = MaskDecoderHQ("vit_b") 
