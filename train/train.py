@@ -402,10 +402,10 @@ def main(net, train_datasets, valid_datasets):
  
     ### --- Step 3: Train or Evaluate ---
     print("--- define optimizer ---")
-    optimizer = optim.Adam(net.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
+    optimizer = optim.AdamW(net.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 10)
     lr_scheduler.last_epoch = 0
-    train(net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler)
+    #train(net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler)
     sam = sam_model_registry["vit_b"](checkpoint="/kaggle/working/sam-hq-research/train/pretrained_checkpoint/sam_vit_b_01ec64.pth").to(device="cuda")
     evaluate(net, sam, valid_dataloaders)
 
@@ -569,7 +569,7 @@ def evaluate(net, sam, valid_dataloaders):
         valid_dataloader = valid_dataloaders[k]
         print('valid_dataloader len:', len(valid_dataloader))
 
-        for data_val in metric_logger.log_every(valid_dataloader,50):
+        for data_val in metric_logger.log_every(valid_dataloader,1000):
             imidx_val, inputs_val, labels_val, shapes_val, labels_ori = data_val['imidx'], data_val['image'], data_val['label'], data_val['shape'], data_val['ori_label']
 
             if torch.cuda.is_available():
