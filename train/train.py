@@ -405,7 +405,7 @@ def main(net, train_datasets, valid_datasets):
     optimizer = optim.AdamW(net.parameters(), lr=0.001, betas=(0.9, 0.999), eps=1e-08, weight_decay=0)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 10)
     lr_scheduler.last_epoch = 0
-    #train(net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler)
+    train(net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler)
     sam = sam_model_registry["vit_b"](checkpoint="/kaggle/working/hqsam_eval_coco/train/pretrained_checkpoint/sam_vit_b_01ec64.pth").to(device="cuda")
     evaluate(net, sam, valid_dataloaders)
 
@@ -430,7 +430,7 @@ def train(net, optimizer, train_dataloaders, valid_dataloaders, lr_scheduler):
         metric_logger = misc.MetricLogger(delimiter="  ")
         # train_dataloaders.batch_sampler.sampler.set_epoch(epoch)
 
-        for data in metric_logger.log_every(train_dataloaders,200):
+        for data in metric_logger.log_every(train_dataloaders,500):
             inputs, labels = data['image'], data['label']
             if torch.cuda.is_available():
                 inputs = inputs.to(device="cuda")
